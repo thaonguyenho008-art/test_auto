@@ -3,6 +3,8 @@ const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 const app = express();
 const port = 3000;
+const jwt = require('jsonwebtoken');
+const SECRET_KEY = 'my_secret_key';
 
 app.use(express.json());
 
@@ -37,10 +39,10 @@ const insertUser = (username, password, email) => {
     });
 };
 
-// Thêm người dùng vào bảng
-insertUser('john_doe', 'password123', 'john.doe@example.com');
-insertUser('jane_doe', 'password456', 'jane.doe@example.com');
-insertUser('alice_smith', 'password789', 'alice.smith@example.com');
+// // Thêm người dùng vào bảng
+// insertUser('john_doe', 'password123', 'john.doe@example.com');
+// insertUser('jane_doe', 'password456', 'jane.doe@example.com');
+// insertUser('alice_smith', 'password789', 'alice.smith@example.com');
 
 
 
@@ -59,37 +61,103 @@ app.post('/login', (req, res) => {
             return res.status(500).json({ message: 'Server error' });
         }
 
-        if (row) {
-            // Nếu tìm thấy người dùng trong cơ sở dữ liệu
-            return res.status(200).json({ message: 'Login successful' });
-        } else {
-            // Nếu không tìm thấy người dùng hoặc sai mật khẩu
-            return res.status(401).json({ message: 'Invalid credentials' });
-        }
-    });
+        if (!row) return res.status(401).json({ message: 'Invalid credentials' });
+
+    // tạo token
+    const token = jwt.sign(
+      { id: row.id, username: row.username },
+      SECRET_KEY,
+      { expiresIn: '1h' }
+    );
+
+    res.status(200).json({ message: 'Login successful', token });
+  });
 });
 
 
-// API POST / register
-app.post('/register', (req, res) =>{
-    // Kiểm tra các trường đầu vào
-    const { username, password,email} = req.body;
-    if (!username || !password || !email) {
-        return res.status(400).json({ message: 'All fields are required!' });
+// API POST /register
+// API POST /register
+app.post('/register', (req, res) => {
+  const { username, password, email } = req.body;
+
+  // Kiểm tra input
+  if (!username || !password || !email) {
+    return res.status(400).json({ message: 'All fields are required!' });
+  }
+
+  const query = `INSERT INTO users (username, password, email) VALUES (?, ?, ?)`;
+
+  db.run(query, [username, password, email], function (err) {
+    if (err) {
+      console.error('Error inserting user:', err);
+
+      // Nếu email đã tồn tại
+      if (err.code === 'SQLITE_CONSTRAINT') {
+        return res.status(400).json({ message: 'Email already exists!' });
+      }
+
+      // Các lỗi DB khác
+      return res.status(500).json({ message: 'Server error' });
     }
 
-    console.log('New user registered:', { username, password, email });
-
-    // Trả về phản hồi thành công
-    return res.status(201).json({ message: 'Registration successful!' });
+    // Trả về user mới tạo
+    return res.status(201).json({
+      id: this.lastID,  // id vừa insert
+      username,
+      email,
+      message: 'Registration successful!'
+    });
+  });
 });
+
 
 // API endpoint: GET /status
 app.get('/status', (req, res) => {
     res.status(200).json({ status: 'API is up and running' });
 });
 
+//  check token
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (!token) {
+    return res.status(401).json({ message: 'Token required' });
+  }
+
+  jwt.verify(token, SECRET_KEY, (err, user) => {
+    if (err) {
+      return res.status(403).json({ message: 'Invalid token' });
+    }
+    req.user = user; // lưu thông tin user từ token
+    next();
+  });
+}
+
+// api delete 
+// API DELETE /users/:id
+app.delete('/users/:id', authenticateToken,(req, res) => {
+  const { id } = req.params;
+
+  const query = `DELETE FROM users WHERE id = ?`;
+
+  db.run(query, [id], function (err) {
+    if (err) {
+      console.error('Error deleting user:', err);
+      return res.status(500).json({ message: 'Server error' });
+    }
+
+    if (this.changes === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Chuẩn REST: trả về 204 No Content
+    return res.status(204).send();
+  });
+});
+
+
 // Start the server
 app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
 });
+
